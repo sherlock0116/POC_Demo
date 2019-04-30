@@ -1,0 +1,14 @@
+# Created by .ignore support plugin (hsz.mobi)
+/.settings/
+*/.settings/
+/.idea/
+*/.idea/
+.idea/
+/target/
+*/.DS_Store
+.DS_Store
+gradlew
+gradlew.bat
+
+*.iml
+*/*.iml
