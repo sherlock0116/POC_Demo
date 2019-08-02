@@ -18,14 +18,3 @@ public class JsonUtils {
         return jsonString.substring(1,(length-1));
     }
 }
-
-class TestJsonUtils{
-
-    public static void main(String[] args) {
-
-        String jsonStr = "{\"name\":\"cat\",\"sex\":\"miao\"}";
-        String string = JsonUtils.subJsonString(jsonStr);
-        System.out.println(string);
-
-    }
-}

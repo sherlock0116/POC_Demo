@@ -28,5 +28,20 @@ public class ConfigurationManager {
         return properties.getProperty(key);
     }
 
+    public static int getIntegerPro(String Key) { return Integer.valueOf(properties.getProperty(Key)); }
 
+    public static boolean getBooleanPro(String key) { return Boolean.valueOf(properties.getProperty(key)); }
+
+    public static long getLongPro(String key) { return  Long.valueOf(properties.getProperty(key)); }
+
+}
+
+class TestConfigurationManager {
+
+    public static void main(String[] args) {
+        System.out.println(ConfigurationManager.class.getResource(""));
+        System.out.println(ConfigurationManager.class.getResource("/"));
+        System.out.println(ConfigurationManager.class.getClassLoader().getResource(""));
+        System.out.println(ConfigurationManager.class.getClassLoader().getResource("/"));
+    }
 }

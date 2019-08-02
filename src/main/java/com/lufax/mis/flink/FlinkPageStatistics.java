@@ -3,6 +3,9 @@ package com.lufax.mis.flink;
 import com.lufax.mis.conf.ConfigurationManager;
 import com.lufax.mis.constant.Constants;
 import com.lufax.mis.domain.PageViewCount;
+import com.lufax.mis.elasticSearch.EsHelper;
+import com.lufax.mis.kafka.KafkaHelper;
+import com.lufax.mis.kafka.KafkaTopics;
 import com.lufax.mis.utils.JsonUtils;
 import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.common.functions.MapFunction;
@@ -48,67 +51,21 @@ public class FlinkPageStatistics {
 
     private static Logger logger = LoggerFactory.getLogger(FlinkPageStatistics.class.getName());
 
-    // Kafka
-    private static final String BOOTSTRAP_SERVERS = ConfigurationManager.getProperty(Constants.KAFKA_LOCAL_BOOTSTRAP_SERVERS);
-    private static final String GROUP_ID = ConfigurationManager.getProperty(Constants.KAFKA_LOCAL_GROUP_ID);
-    private static final String TOPIC_NAME = ConfigurationManager.getProperty(Constants.KAFKA_LOCAL_TOPIC_NAME);
-
-    // ES
-    private static final String ES_CLUSTER_NAME = ConfigurationManager.getProperty(Constants.ES_CLUSTER_NAME);
-    private static final String ES_BULK_FLUSH_MAX_ACTIONS = ConfigurationManager.getProperty(Constants.ES_BULK_FLUSH_MAX_ACTIONS);
-    private static final String ES_INETADDRESS_NAME_1 = ConfigurationManager.getProperty(Constants.ES_INETADDRESS_NAME_1);
-    private static final String ES_INETADDRESS_NAME_2 = ConfigurationManager.getProperty(Constants.ES_INETADDRESS_NAME_2);
-    private static final int ES_PORT = 9003;
-
-
-    /*
-        initialize Kafka config
-     */
-    private static Properties initKafkaConfig(){
-        Properties propers = new Properties();
-        propers.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
-        propers.put(ConsumerConfig.GROUP_ID_CONFIG, GROUP_ID);
-        return propers;
-    }
-
-    /*
-        initialize ES config
-     */
-    private static Map<String, String> initESConfig(){
-        HashMap<String, String> esConfig = new HashMap<>();
-        esConfig.put(Constants.ES_CLUSTER_NAME_CONFIG, ES_CLUSTER_NAME);
-        esConfig.put(Constants.ES_BULK_FLUSH_MAX_ACTIONS_CONFIG, ES_BULK_FLUSH_MAX_ACTIONS);
-        return esConfig;
-    }
-
-    /*
-        initialize ES address
-     */
-    private static List<InetSocketAddress> initESSocketAddress() {
-        ArrayList<InetSocketAddress> addressArrayList = new ArrayList<>();
-        try {
-            addressArrayList.add(new InetSocketAddress(InetAddress.getByName(ES_INETADDRESS_NAME_1), ES_PORT));
-            addressArrayList.add(new InetSocketAddress(InetAddress.getByName(ES_INETADDRESS_NAME_2), ES_PORT));
-        } catch (UnknownHostException e) {
-            e.printStackTrace();
-        }
-        return  addressArrayList;
-    }
-
     public static void main(String[] args) {
 
         /*
             create FlinkKafkaConsumer Source
          */
-        Properties properties = initKafkaConfig();
-        FlinkKafkaConsumer010<String> flinkKafkaConsumer010 = new FlinkKafkaConsumer010<>(Arrays.asList(TOPIC_NAME), new SimpleStringSchema(), properties);
+        Properties properties = KafkaHelper.getKafkaProducerProperty();
+        String topicName = KafkaTopics.getSourceTopic();
+        FlinkKafkaConsumer010<String> flinkKafkaConsumer010 = new FlinkKafkaConsumer010<>(Arrays.asList(topicName), new SimpleStringSchema(), properties);
         flinkKafkaConsumer010.setStartFromLatest();
 
         /*
             create Elasticsearch Sink
          */
-        Map<String, String> esConfig = initESConfig();
-        List<InetSocketAddress> esSocketAddress = initESSocketAddress();
+        Map<String, String> esConfig = EsHelper.getEsSinkConfig();
+        List<InetSocketAddress> esSocketAddress = EsHelper.getEsAddress();
         ElasticsearchSink<PageViewCount> elasticsearchSink = new ElasticsearchSink<>(esConfig, esSocketAddress, new ElasticsearchSinkFunction<PageViewCount>() {
             @Override
             public void process(PageViewCount pageViewCount, RuntimeContext runtimeContext, RequestIndexer requestIndexer) {
@@ -266,145 +223,144 @@ public class FlinkPageStatistics {
 
     }
 
+    /**
+     * 窗口内un去重
+     */
+    public static class UvWindowStateFunction implements WindowFunction<Row, PageViewCount, String, TimeWindow>{
 
-}
-
-/**
- * 窗口内un去重
- */
-class UvWindowStateFunction implements WindowFunction<Row, PageViewCount, String, TimeWindow>{
-
-    @Override
-    public void apply(String key, TimeWindow timeWindow, Iterable<Row> iterable, Collector<PageViewCount> collector) throws Exception {
-        String pageName = key;
-        HashMap<String, Row> rowHashMap = new HashMap<>();
-        for (Row row : iterable) {
-            String userName = (String) row.getField(0);
-            rowHashMap.put(userName, row);
-        }
-        Set<String> userNames = rowHashMap.keySet();
-        long count = userNames.size();
-        long windowEnd = timeWindow.getEnd();
-        collector.collect(new PageViewCount(pageName, windowEnd, count));
-    }
-}
-
-/**
- * 按窗口结束时间分组, 统计组内所有PageViewCount的page的UV
- */
-class ScreenUVStatistics extends KeyedProcessFunction<Long, PageViewCount, List<PageViewCount>>{
-
-    private ListState<PageViewCount> uvState;
-
-    @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
-        uvState = getRuntimeContext().getListState(new ListStateDescriptor<PageViewCount>("uvState", PageViewCount.class));
-    }
-
-    @Override
-    public void processElement(PageViewCount pageViewCount, Context context, Collector<List<PageViewCount>> collector) throws Exception {
-        uvState.add(pageViewCount);
-        context.timerService().registerEventTimeTimer(pageViewCount.getWindowEnd());
-    }
-
-    @Override
-    public void onTimer(long timestamp, OnTimerContext ctx, Collector<List<PageViewCount>> out) throws Exception {
-        super.onTimer(timestamp, ctx, out);
-        ArrayList<PageViewCount> pageViewCounts = new ArrayList<>();
-        for (PageViewCount pageViewCount : uvState.get()) {
-            pageViewCounts.add(pageViewCount);
-        }
-        uvState.clear();
-        pageViewCounts.sort(new Comparator<PageViewCount>() {
-            @Override
-            public int compare(PageViewCount o1, PageViewCount o2) {
-                return (int) (o2.getCount() - o1.getCount());
+        @Override
+        public void apply(String key, TimeWindow timeWindow, Iterable<Row> iterable, Collector<PageViewCount> collector) throws Exception {
+            String pageName = key;
+            HashMap<String, Row> rowHashMap = new HashMap<>();
+            for (Row row : iterable) {
+                String userName = (String) row.getField(0);
+                rowHashMap.put(userName, row);
             }
-        });
-        out.collect(pageViewCounts);
-    }
-}
-
-/**
- *  窗口内计数器,计算页面PV
- */
-class PvCountAccumulator implements AggregateFunction<Row, Long, Long>{
-
-    @Override
-    public Long createAccumulator() {
-        return 0L;
+            Set<String> userNames = rowHashMap.keySet();
+            long count = userNames.size();
+            long windowEnd = timeWindow.getEnd();
+            collector.collect(new PageViewCount(pageName, windowEnd, count));
+        }
     }
 
-    @Override
-    public Long add(Row row, Long acc) {
-        return acc + 1L;
+    /**
+     * 按窗口结束时间分组, 统计组内所有PageViewCount的page的UV
+     */
+    public static class ScreenUVStatistics extends KeyedProcessFunction<Long, PageViewCount, List<PageViewCount>>{
+
+        private ListState<PageViewCount> uvState;
+
+        @Override
+        public void open(Configuration parameters) throws Exception {
+            super.open(parameters);
+            uvState = getRuntimeContext().getListState(new ListStateDescriptor<PageViewCount>("uvState", PageViewCount.class));
+        }
+
+        @Override
+        public void processElement(PageViewCount pageViewCount, Context context, Collector<List<PageViewCount>> collector) throws Exception {
+            uvState.add(pageViewCount);
+            context.timerService().registerEventTimeTimer(pageViewCount.getWindowEnd());
+        }
+
+        @Override
+        public void onTimer(long timestamp, OnTimerContext ctx, Collector<List<PageViewCount>> out) throws Exception {
+            super.onTimer(timestamp, ctx, out);
+            ArrayList<PageViewCount> pageViewCounts = new ArrayList<>();
+            for (PageViewCount pageViewCount : uvState.get()) {
+                pageViewCounts.add(pageViewCount);
+            }
+            uvState.clear();
+            pageViewCounts.sort(new Comparator<PageViewCount>() {
+                @Override
+                public int compare(PageViewCount o1, PageViewCount o2) {
+                    return (int) (o2.getCount() - o1.getCount());
+                }
+            });
+            out.collect(pageViewCounts);
+        }
     }
 
-    @Override
-    public Long getResult(Long acc) {
-        return acc;
+    /**
+     *  窗口内计数器,计算页面PV
+     */
+    public static class PvCountAccumulator implements AggregateFunction<Row, Long, Long>{
+
+        @Override
+        public Long createAccumulator() {
+            return 0L;
+        }
+
+        @Override
+        public Long add(Row row, Long acc) {
+            return acc + 1L;
+        }
+
+        @Override
+        public Long getResult(Long acc) {
+            return acc;
+        }
+
+        @Override
+        public Long merge(Long acc2, Long acc1) {
+            return acc2 + acc1;
+        }
     }
 
-    @Override
-    public Long merge(Long acc2, Long acc1) {
-        return acc2 + acc1;
-    }
-}
-
-/**
-  * 窗口状态统计函数,返回出PageViewCount
-  */
-class PvWindowStateFunction implements WindowFunction<Long, PageViewCount, String, TimeWindow> {
-    @Override
-    public void apply(String key, TimeWindow timeWindow, Iterable<Long> counts, Collector<PageViewCount> collector) throws Exception {
+    /**
+     * 窗口状态统计函数,返回出PageViewCount
+     */
+    public static class PvWindowStateFunction implements WindowFunction<Long, PageViewCount, String, TimeWindow> {
+        @Override
+        public void apply(String key, TimeWindow timeWindow, Iterable<Long> counts, Collector<PageViewCount> collector) throws Exception {
 //        String _key = ((Tuple1<String>) key).f0;
-        PageViewCount pageViewCount = new PageViewCount(key, timeWindow.getEnd(), counts.iterator().next());
-        collector.collect(pageViewCount);
-    }
-}
-
-/**
-  * 按窗口结束时间分组后,统计组内所有PageViewCount的page的PV/UV
-  */
-class ScreenStatistics extends KeyedProcessFunction<Long, PageViewCount, List<PageViewCount>>{
-
-    private ListState<PageViewCount> statisticsState;
-
-    @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
-        // 注册ListState
-        statisticsState = getRuntimeContext().getListState(new ListStateDescriptor<PageViewCount>("statisticsState", PageViewCount.class));
-    }
-
-    @Override
-    public void processElement(PageViewCount input, Context context, Collector<List<PageViewCount>> collector) throws Exception {
-        // 添加输入到ListState
-        statisticsState.add(input);
-        // 注册事件,水印到达windowEnd+1,触发onTimer
-        context.timerService().registerEventTimeTimer(input.getWindowEnd());
-    }
-
-    @Override
-    public void onTimer(long timestamp, OnTimerContext ctx, Collector<List<PageViewCount>> out) throws Exception {
-        super.onTimer(timestamp, ctx, out);
-        ArrayList<PageViewCount> pageViewCounts = new ArrayList<PageViewCount>();
-        for (PageViewCount pageViewCount : statisticsState.get()) {
-            pageViewCounts.add(pageViewCount);
+            PageViewCount pageViewCount = new PageViewCount(key, timeWindow.getEnd(), counts.iterator().next());
+            collector.collect(pageViewCount);
         }
-        statisticsState.clear();
-        pageViewCounts.sort(new Comparator<PageViewCount>() {
-            @Override
-            public int compare(PageViewCount o1, PageViewCount o2) {
-                return (int) (o2.getCount() - o1.getCount());
-            }
-        });
-        out.collect(pageViewCounts);
     }
 
+    /**
+     * 按窗口结束时间分组后,统计组内所有PageViewCount的page的PV/UV
+     */
+    public static class ScreenStatistics extends KeyedProcessFunction<Long, PageViewCount, List<PageViewCount>>{
 
+        private ListState<PageViewCount> statisticsState;
+
+        @Override
+        public void open(Configuration parameters) throws Exception {
+            super.open(parameters);
+            // 注册ListState
+            statisticsState = getRuntimeContext().getListState(new ListStateDescriptor<PageViewCount>("statisticsState", PageViewCount.class));
+        }
+
+        @Override
+        public void processElement(PageViewCount input, Context context, Collector<List<PageViewCount>> collector) throws Exception {
+            // 添加输入到ListState
+            statisticsState.add(input);
+            // 注册事件,水印到达windowEnd+1,触发onTimer
+            context.timerService().registerEventTimeTimer(input.getWindowEnd());
+        }
+
+        @Override
+        public void onTimer(long timestamp, OnTimerContext ctx, Collector<List<PageViewCount>> out) throws Exception {
+            super.onTimer(timestamp, ctx, out);
+            ArrayList<PageViewCount> pageViewCounts = new ArrayList<PageViewCount>();
+            for (PageViewCount pageViewCount : statisticsState.get()) {
+                pageViewCounts.add(pageViewCount);
+            }
+            statisticsState.clear();
+            pageViewCounts.sort(new Comparator<PageViewCount>() {
+                @Override
+                public int compare(PageViewCount o1, PageViewCount o2) {
+                    return (int) (o2.getCount() - o1.getCount());
+                }
+            });
+            out.collect(pageViewCounts);
+        }
+
+    }
 }
+
+
 
 
 
