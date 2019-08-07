@@ -54,23 +54,27 @@ public class FlinkTableProcessor {
         )
                 .withFormat(
                         new Json()
+                                /* 当字段缺失的时候是否解析失败(默认false) */
                                 .failOnMissingField(false)
-                                .schema(Types.ROW())
+                                /* [方式1] 使用Flink数据类型定义. 然后通过mapping映射成JSON Schema */
+//                                .schema(Types.ROW())
+                                /* [方式2] 通过配置jsonSchema构建 JSON FORMAT */
+//                                .jsonSchema(
+//                                        "{" +
+//                                                "type: 'object'," +
+//                                                "properties: {" +
+//                                                    "user_id: {type: 'string'}," +
+//                                                    "user_name: {type: 'string'}," +
+//                                                    "request_time: {type:'string',format: 'date-time'}," +
+//                                                    "point_type: {type: 'string'}," +
+//                                                    "category: {type: 'string'}," +
+//                                                    "title: {type: string}," +
+//                                                    "action: {type: string}" +
+//                                                "}" +
+//                                        "}"
+//                                )
+                                /* [方式3] 直接使用Table中的Schema信息,转换成JSON结构 */
                                 .deriveSchema()
-                                .jsonSchema(
-                                        "{" +
-                                                "type: 'object'," +
-                                                "properties: {" +
-                                                    "user_id: {type: 'string'}," +
-                                                    "user_name: {type: 'string'}," +
-                                                    "request_time: {type:'string',format: 'date-time'}," +
-                                                    "point_type: {type: 'string'}," +
-                                                    "category: {type: 'string'}," +
-                                                    "title: {type: string}," +
-                                                    "action: {type: string}" +
-                                                "}" +
-                                        "}"
-                                )
                 );
 
         /* kafka producer 每秒产生一条数据, 基于处理时间的数据流,一个10s的滑动窗口, 统计每个窗口内处理的数据量是否为10 */
