@@ -1,6 +1,5 @@
 package com.lufax.flinkPoc
 
-import com.typesafe.scalalogging.Logger
 import org.apache.flink.api.common.state.MapStateDescriptor
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo
 import org.apache.flink.configuration.Configuration
@@ -8,7 +7,9 @@ import org.apache.flink.streaming.api.functions.source.{RichParallelSourceFuncti
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
 import org.apache.flink.api.scala._
 import org.apache.flink.streaming.api.functions.co.BroadcastProcessFunction
+import org.apache.flink.streaming.api.functions.source.SourceFunction.SourceContext
 import org.apache.flink.util.Collector
+import org.apache.logging.log4j.scala.Logger
 
 import scala.util.Random
 
@@ -50,7 +51,8 @@ object DynamicLoadConfiguration {
 
 class MyStreamFunction(param: String) extends RichParallelSourceFunction[String] {
 
-    private[this] val LOGGER = Logger(this.getClass)
+
+    private [this] lazy val LOGGER = Logger(this.getClass)
 
     @volatile private var isRunning = true
     private val keywords = Array("java", "php", "python","scala")
@@ -71,7 +73,7 @@ class MyStreamFunction(param: String) extends RichParallelSourceFunction[String]
             控制流:模拟10秒随机更新一次拦截的关键词
             数据流:模拟每秒发送一条数据
   */
-    override def run(src: SourceFunction.SourceContext[String]): Unit = {
+    override def run(src: SourceContext[String]): Unit = {
         val keyWordLength = keywords.length
         val streamSetSize = streamSet.length
         while (isRunning) {
@@ -104,7 +106,7 @@ class MyStreamFunction(param: String) extends RichParallelSourceFunction[String]
 
 class MyBroadcastProcessFunction extends BroadcastProcessFunction[String, String, String] {
 
-    private [this] val LOGGER = Logger(this.getClass)
+    lazy private [this] val LOGGER = Logger(this.getClass)
     private [this] var keyword: String = _
 
     override def open(parameters: Configuration): Unit = {
